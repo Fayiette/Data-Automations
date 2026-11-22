@@ -150,7 +150,7 @@ def load_parquet(path: Path) -> pd.DataFrame:
 
 def fetch_and_merge(
     existing: dict[str, pd.DataFrame],
-) -> tuple[dict[str, pd.DataFrame], int]:
+) -> tuple[dict[str, pd.DataFrame], int, int]:
     client_id = env_required("SPOTIFY_CLIENT_ID")
     client_secret = env_required("SPOTIFY_CLIENT_SECRET")
     refresh_token = env_required("SPOTIFY_REFRESH_TOKEN")
@@ -275,9 +275,12 @@ def fetch_and_merge(
         combined_df = history_df
     combined_df = combined_df.sort_values("played_at", ascending=False).reset_index(drop=True)
 
+    added_listens = max(len(combined_df) - len(existing_history_df), 0)
+
     logger.info(
-        "Merge complete: %d listens, songs +%d.",
+        "Merge complete: %d total listens (listens +%d), songs +%d.",
         len(combined_df),
+        added_listens,
         added_songs,
     )
 
@@ -288,11 +291,12 @@ def fetch_and_merge(
             "albums": albums_df,
             "artists": artists_df,
         },
+        added_listens,
         added_songs,
     )
 
 
-def main() -> tuple[str, int]:
+def main() -> tuple[str, int, int]:
     configure_logging()
     client, bucket = s3_client()
     prefix = r2_prefix()
@@ -301,7 +305,7 @@ def main() -> tuple[str, int]:
     paths = strict_download_parquets(client, bucket, prefix, base)
     existing = {name: load_parquet(pq_path) for name, (pq_path, _, _, _) in paths.items()}
 
-    dataframes, added_songs = fetch_and_merge(existing)
+    dataframes, added_listens, added_songs = fetch_and_merge(existing)
 
     upload_results: list[str] = []
     for name, (pq_path, csv_path, key_pq, key_csv) in paths.items():
@@ -328,7 +332,7 @@ def main() -> tuple[str, int]:
             )
         )
 
-    return fold_upload_results(*upload_results), added_songs
+    return fold_upload_results(*upload_results), added_listens, added_songs
 
 
 if __name__ == "__main__":
@@ -336,9 +340,12 @@ if __name__ == "__main__":
     label = "Spotify Fetch"
     pre = discord_user_prefix()
     try:
-        result, added_songs = main()
+        result, added_listens, added_songs = main()
         if result == "uploaded":
-            msg = f"[SUCCESS] {label} — Uploaded at <t:{ts}:f> | songs +{added_songs}"
+            msg = (
+                f"[SUCCESS] {label} — Uploaded at <t:{ts}:f> | "
+                f"listens +{added_listens} | new songs +{added_songs}"
+            )
             send_discord_alert(msg)
         elif result == "no-change":
             send_discord_alert(f"[NO-CHANGE] {label} — No changes at <t:{ts}:f>")

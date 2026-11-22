@@ -122,6 +122,76 @@ class TestSpotifyTokenRefresh(unittest.TestCase):
         self.assertEqual(mock_post.call_count, 3)
         self.assertEqual(mock_sleep.call_count, 2)
 
+    @patch("spotify_fetch.spotipy.Spotify")
+    @patch("spotify_fetch.get_spotify_token")
+    def test_fetch_and_merge_counts_new_listens_and_songs(
+        self, mock_get_token: MagicMock, mock_spotipy_cls: MagicMock
+    ) -> None:
+        import pandas as pd
+        from spotify_fetch import fetch_and_merge
+
+        mock_get_token.return_value = ("token_abc", None)
+        mock_sp = MagicMock()
+        mock_spotipy_cls.return_value = mock_sp
+
+        # Mock 1 recently played track
+        mock_sp.current_user_recently_played.return_value = {
+            "items": [
+                {
+                    "played_at": "2026-11-22T19:00:00.000Z",
+                    "track": {
+                        "id": "track_1",
+                        "name": "Track One",
+                        "duration_ms": 180000,
+                        "artists": [{"id": "artist_1", "name": "Artist One"}],
+                        "album": {"name": "Album One", "release_date": "2026-01-01", "images": []},
+                    },
+                }
+            ],
+            "next": None,
+        }
+        mock_sp.artist.return_value = {"genres": ["pop"], "images": []}
+
+        # Case 1: Brand new song and new listen
+        existing_empty = {
+            "listening_history": pd.DataFrame(columns=["played_at", "track_id"]),
+            "songs": pd.DataFrame(columns=["track_id", "track_name"]),
+            "albums": pd.DataFrame(columns=["track_id", "album_name"]),
+            "artists": pd.DataFrame(columns=["artist_id", "artist_name"]),
+        }
+        with patch.dict(
+            "os.environ",
+            {
+                "SPOTIFY_CLIENT_ID": "cid",
+                "SPOTIFY_CLIENT_SECRET": "sec",
+                "SPOTIFY_REFRESH_TOKEN": "ref",
+            },
+        ):
+            _, added_listens, added_songs = fetch_and_merge(existing_empty)
+            self.assertEqual(added_listens, 1)
+            self.assertEqual(added_songs, 1)
+
+        # Case 2: Same song already in songs catalog, but new play timestamp
+        existing_with_song = {
+            "listening_history": pd.DataFrame(
+                [{"played_at": "2026-11-22T18:00:00.000Z", "track_id": "track_1"}]
+            ),
+            "songs": pd.DataFrame([{"track_id": "track_1", "track_name": "Track One"}]),
+            "albums": pd.DataFrame([{"track_id": "track_1", "album_name": "Album One"}]),
+            "artists": pd.DataFrame([{"artist_id": "artist_1", "artist_name": "Artist One"}]),
+        }
+        with patch.dict(
+            "os.environ",
+            {
+                "SPOTIFY_CLIENT_ID": "cid",
+                "SPOTIFY_CLIENT_SECRET": "sec",
+                "SPOTIFY_REFRESH_TOKEN": "ref",
+            },
+        ):
+            _, added_listens, added_songs = fetch_and_merge(existing_with_song)
+            self.assertEqual(added_listens, 1)
+            self.assertEqual(added_songs, 0)
+
 
 if __name__ == "__main__":
     unittest.main()

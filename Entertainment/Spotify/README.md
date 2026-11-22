@@ -87,4 +87,4 @@ R2 layout and object basenames come from `**prod` secrets** (Spotify-prefixed to
 
 Also required on `prod`: `R2_`* credentials, `SPOTIFY_CLIENT_ID`, `SPOTIFY_CLIENT_SECRET`, `SPOTIFY_REFRESH_TOKEN`, optional `DISCORD_*`.
 
-Discord: success messages without `@` ping; upload line includes `songs +N` when data changed.
+Discord: success messages without `@` ping; upload line includes `listens +M | new songs +N` when data changed.
