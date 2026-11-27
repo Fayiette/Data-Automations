@@ -43,6 +43,33 @@ class TestSpotifyAuth(unittest.TestCase):
         self.assertIn("Token exchange failed", str(ctx.exception))
         self.assertIn("Invalid authorization code", str(ctx.exception))
 
+    def test_oauth_callback_validates_state(self) -> None:
+        import io
+        from spotify_auth import _OAuthCallbackHandler
+
+        _OAuthCallbackHandler.expected_state = "expected_nonce_123"
+        _OAuthCallbackHandler.auth_code = None
+        _OAuthCallbackHandler.auth_error = None
+
+        handler = _OAuthCallbackHandler.__new__(_OAuthCallbackHandler)
+        handler.path = "/callback?code=abc&state=wrong_nonce"
+        handler.wfile = io.BytesIO()
+        handler.send_response = MagicMock()
+        handler.send_header = MagicMock()
+        handler.end_headers = MagicMock()
+
+        handler.do_GET()
+        handler.send_response.assert_called_with(400)
+        self.assertIsNone(_OAuthCallbackHandler.auth_code)
+        self.assertEqual(_OAuthCallbackHandler.auth_error, "OAuth state mismatch")
+
+        handler.path = "/callback?code=abc&state=expected_nonce_123"
+        handler.wfile = io.BytesIO()
+        handler.send_response.reset_mock()
+        handler.do_GET()
+        handler.send_response.assert_called_with(200)
+        self.assertEqual(_OAuthCallbackHandler.auth_code, "abc")
+
 
 if __name__ == "__main__":
     unittest.main()

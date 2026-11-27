@@ -9,6 +9,7 @@ import hashlib
 import logging
 import os
 import sys
+import urllib.parse
 from pathlib import Path
 from typing import Optional, Tuple
 
@@ -16,6 +17,53 @@ import boto3
 from botocore.exceptions import BotoCoreError, ClientError
 
 logger = logging.getLogger("spotify")
+
+_REDACT_SECRET_ENV_NAMES = (
+    "SPOTIFY_CLIENT_ID",
+    "SPOTIFY_CLIENT_SECRET",
+    "SPOTIFY_REFRESH_TOKEN",
+    "SPOTIFY_R2_BUCKET",
+    "R2_BUCKET",
+    "SPOTIFY_R2_ACCESS_KEY_ID",
+    "R2_ACCESS_KEY_ID",
+    "SPOTIFY_R2_SECRET_ACCESS_KEY",
+    "R2_SECRET_ACCESS_KEY",
+    "SPOTIFY_R2_ENDPOINT",
+    "R2_ENDPOINT",
+    "SPOTIFY_DISCORD_WEBHOOK_URL",
+    "DISCORD_WEBHOOK_URL",
+    "DISCORD_WEBHOOK",
+)
+
+
+def redact_secrets(text: str) -> str:
+    """Strip configured credential/endpoint values (raw and URL-encoded) from text."""
+    if not text:
+        return text
+    result = text
+    for name in _REDACT_SECRET_ENV_NAMES:
+        value = (os.getenv(name) or "").strip()
+        min_len = 6 if name.endswith("R2_BUCKET") else 4
+        if len(value) < min_len:
+            continue
+        result = result.replace(value, "***")
+        encoded = urllib.parse.quote(value, safe="")
+        if len(encoded) >= min_len:
+            result = result.replace(encoded, "***")
+    return result
+
+
+class _SecretRedactingFilter(logging.Filter):
+    def filter(self, record: logging.LogRecord) -> bool:
+        try:
+            rendered = record.getMessage()
+        except Exception:
+            rendered = str(record.msg)
+        redacted = redact_secrets(rendered)
+        if redacted != rendered:
+            record.msg = redacted
+            record.args = ()
+        return True
 
 
 def load_repo_env() -> None:
@@ -44,7 +92,7 @@ def env_int(name: str, default: int) -> int:
     try:
         return int(raw)
     except ValueError:
-        logger.error("Env var %s must be an integer, got %r", name, raw)
+        logger.error("Env var %s must be an integer.", name)
         sys.exit(1)
 
 
@@ -89,9 +137,17 @@ def configure_logging(level: int = logging.INFO) -> None:
         format="%(asctime)s %(levelname)s %(message)s",
         datefmt="%Y-%m-%dT%H:%M:%S",
     )
+    redacting_filter = _SecretRedactingFilter()
+    root_logger = logging.getLogger()
+    if not any(isinstance(f, _SecretRedactingFilter) for f in root_logger.filters):
+        root_logger.addFilter(redacting_filter)
+    for handler in root_logger.handlers:
+        if not any(isinstance(f, _SecretRedactingFilter) for f in handler.filters):
+            handler.addFilter(redacting_filter)
     logging.getLogger("botocore").setLevel(logging.WARNING)
     logging.getLogger("boto3").setLevel(logging.WARNING)
     logging.getLogger("urllib3").setLevel(logging.WARNING)
+    logging.getLogger("spotipy").setLevel(logging.WARNING)
 
 
 def _require(name: str) -> str:
@@ -148,7 +204,7 @@ def upload_file_if_changed(
     local: Path,
     content_type: str = "application/vnd.apache.parquet",
     cache_control: Optional[str] = None,
-    public: bool = True,
+    public: bool = False,
 ) -> str:
     local_hash = compute_file_hash(local)
     if not local_hash:
@@ -191,7 +247,8 @@ def send_discord_alert(message: str) -> None:
     try:
         import requests
 
-        resp = requests.post(url, json={"content": message[:1900]}, timeout=8)
+        safe_message = redact_secrets(message)[:1900]
+        resp = requests.post(url, json={"content": safe_message}, timeout=8)
         resp.raise_for_status()
     except Exception:
         logger.warning("Discord notification failed.")

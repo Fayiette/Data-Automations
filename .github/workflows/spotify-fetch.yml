@@ -24,10 +24,14 @@ concurrency:
   group: spotify-fetch-${{ github.ref }}
   cancel-in-progress: false
 
+permissions:
+  contents: read
+
 jobs:
   fetch:
     runs-on: ubuntu-latest
     environment: prod
+    timeout-minutes: 10
     defaults:
       run:
         working-directory: "Entertainment/Spotify"

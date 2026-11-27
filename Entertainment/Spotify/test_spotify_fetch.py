@@ -192,6 +192,61 @@ class TestSpotifyTokenRefresh(unittest.TestCase):
             self.assertEqual(added_listens, 1)
             self.assertEqual(added_songs, 0)
 
+    def test_redact_secrets_preserves_label_and_discord_mention(self) -> None:
+        from spotify_r2 import configure_logging, discord_user_prefix, redact_secrets
+
+        with patch.dict(
+            "os.environ",
+            {
+                "SPOTIFY_CLIENT_SECRET": "sec_val_12345",
+                "R2_ENDPOINT": "https://secret-r2.invalid/path?x=1",
+                "SPOTIFY_DISCORD_WEBHOOK_URL": "https://discord.com/api/webhooks/1/abc",
+                "DISCORD_USER_ID": "998877665544332211",
+            },
+        ):
+            msg = (
+                f"{discord_user_prefix()}[FAILED] Spotify Fetch failed: "
+                "sec_val_12345 https%3A%2F%2Fsecret-r2.invalid%2Fpath%3Fx%3D1"
+            )
+            redacted = redact_secrets(msg)
+            self.assertNotIn("sec_val_12345", redacted)
+            self.assertNotIn("secret-r2.invalid", redacted)
+            self.assertIn("<@998877665544332211>", redacted)
+            self.assertIn("Spotify Fetch", redacted)
+
+        configure_logging()
+        import logging
+
+        self.assertEqual(logging.getLogger("spotipy").level, logging.WARNING)
+
+    @patch("spotify_fetch.requests.post")
+    def test_get_spotify_token_omits_raw_response_text(self, mock_post: MagicMock) -> None:
+        mock_resp = MagicMock()
+        mock_resp.status_code = 400
+        mock_resp.json.side_effect = ValueError("not json")
+        mock_resp.text = "SENSITIVE_UPSTREAM_BODY_XYZ"
+        mock_post.return_value = mock_resp
+
+        with self.assertRaises(RuntimeError) as ctx:
+            get_spotify_token("cid", "csec", "ref")
+        self.assertNotIn("SENSITIVE_UPSTREAM_BODY_XYZ", str(ctx.exception))
+
+    def test_upload_file_if_changed_defaults_private_acl(self) -> None:
+        from pathlib import Path
+        import tempfile
+        from spotify_r2 import upload_file_if_changed
+
+        mock_client = MagicMock()
+        mock_client.get_object.side_effect = Exception("missing")
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "sample.csv"
+            target.write_text("a,b\n1,2\n", encoding="utf-8")
+            result = upload_file_if_changed(mock_client, "bucket", "Spotify/sample.csv", target)
+
+        self.assertEqual(result, "uploaded")
+        _, kwargs = mock_client.upload_file.call_args
+        self.assertNotIn("ACL", kwargs["ExtraArgs"])
+
 
 if __name__ == "__main__":
     unittest.main()

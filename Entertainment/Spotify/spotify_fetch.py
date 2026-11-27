@@ -80,29 +80,27 @@ def get_spotify_token(client_id: str, client_secret: str, refresh_token: str) ->
             if resp.status_code in (400, 401):
                 try:
                     err_payload = resp.json()
-                    err_code = err_payload.get("error", "unknown_error")
-                    err_desc = err_payload.get("error_description", resp.text)
+                    raw_code = str(err_payload.get("error", "unknown_error"))
+                    err_code = raw_code if raw_code.replace("_", "").isalnum() else "unknown_error"
                 except Exception:
                     err_code = "unknown_error"
-                    err_desc = resp.text
                 logger.error(
-                    "Spotify token refresh rejected (HTTP %d): %s - %s",
+                    "Spotify token refresh rejected (HTTP %d): %s",
                     resp.status_code,
                     err_code,
-                    err_desc,
                 )
                 if err_code == "invalid_grant":
                     raise RuntimeError(
-                        f"Spotify refresh token is invalid or expired ({err_desc}). "
+                        "Spotify refresh token is invalid or expired. "
                         "Regenerate SPOTIFY_REFRESH_TOKEN and update GitHub Secrets."
                     )
                 if err_code == "invalid_client":
                     raise RuntimeError(
-                        f"Spotify client authentication failed ({err_desc}). "
+                        "Spotify client authentication failed. "
                         "Check SPOTIFY_CLIENT_ID and SPOTIFY_CLIENT_SECRET."
                     )
                 raise RuntimeError(
-                    f"Spotify token request rejected (HTTP {resp.status_code}): {err_code} - {err_desc}"
+                    f"Spotify token request rejected (HTTP {resp.status_code}): {err_code}"
                 )
 
             resp.raise_for_status()
@@ -318,7 +316,7 @@ def main() -> tuple[str, int, int]:
                 key_pq,
                 pq_path,
                 content_type="application/vnd.apache.parquet",
-                public=True,
+                public=False,
             )
         )
         upload_results.append(
@@ -328,7 +326,7 @@ def main() -> tuple[str, int, int]:
                 key_csv,
                 csv_path,
                 content_type="text/csv",
-                public=True,
+                public=False,
             )
         )
 
@@ -354,7 +352,7 @@ if __name__ == "__main__":
                 f"{pre}[WARN] {label} — Finished with status {result} at <t:{ts}:f>"
             )
             sys.exit(1)
-    except Exception:
-        logger.exception("Script failed.")
-        send_discord_alert(f"{pre}[FAILED] {label} failed at <t:{ts}:f>")
+    except Exception as exc:
+        logger.error("Script failed (%s).", type(exc).__name__)
+        send_discord_alert(f"{pre}[FAILED] {label} failed at <t:{ts}:f> ({type(exc).__name__})")
         sys.exit(1)

@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import base64
 import os
+import secrets
 import sys
 import urllib.parse
 import webbrowser
@@ -26,11 +27,25 @@ SCOPE = "user-read-recently-played"
 class _OAuthCallbackHandler(BaseHTTPRequestHandler):
     auth_code: Optional[str] = None
     auth_error: Optional[str] = None
+    expected_state: Optional[str] = None
 
     def do_GET(self) -> None:  # noqa: N802
         parsed_url = urllib.parse.urlparse(self.path)
         if parsed_url.path == "/callback":
             query = urllib.parse.parse_qs(parsed_url.query)
+            returned_state = query.get("state", [None])[0]
+            if self.expected_state and not secrets.compare_digest(
+                returned_state or "", self.expected_state
+            ):
+                _OAuthCallbackHandler.auth_error = "OAuth state mismatch"
+                self.send_response(400)
+                self.send_header("Content-Type", "text/html; charset=utf-8")
+                self.end_headers()
+                self.wfile.write(
+                    b"<html><body><h2>Authorization failed!</h2>"
+                    b"<p>Invalid OAuth state parameter.</p></body></html>"
+                )
+                return
             if "code" in query:
                 _OAuthCallbackHandler.auth_code = query["code"][0]
                 self.send_response(200)
@@ -81,10 +96,10 @@ def exchange_code_for_tokens(
         try:
             err = resp.json()
             err_code = err.get("error", "unknown")
-            err_desc = err.get("error_description", resp.text)
+            err_desc = err.get("error_description", "token endpoint error")
         except Exception:
             err_code = "unknown"
-            err_desc = resp.text
+            err_desc = "non-json error response"
         raise RuntimeError(f"Token exchange failed (HTTP {resp.status_code}): {err_code} - {err_desc}")
     return resp.json()
 
@@ -103,11 +118,16 @@ def main() -> None:
         print("[ERROR] Both client ID and client secret are required.")
         sys.exit(1)
 
+    oauth_state = secrets.token_urlsafe(24)
+    _OAuthCallbackHandler.expected_state = oauth_state
+    _OAuthCallbackHandler.auth_code = None
+    _OAuthCallbackHandler.auth_error = None
     auth_params = {
         "response_type": "code",
         "client_id": client_id,
         "scope": SCOPE,
         "redirect_uri": REDIRECT_URI,
+        "state": oauth_state,
     }
     auth_url = f"https://accounts.spotify.com/authorize?{urllib.parse.urlencode(auth_params)}"
 
